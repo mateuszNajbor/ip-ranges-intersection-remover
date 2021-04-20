@@ -1,6 +1,6 @@
-##IP Ranges Intersection Remover
+**IP Ranges Intersection Remover**
 
-###How to run it
+**How to run it**
 
 To run this project you need to install Spark 3.0.0 and run main class IpRangesIntersectionRemoverBoot.
 
