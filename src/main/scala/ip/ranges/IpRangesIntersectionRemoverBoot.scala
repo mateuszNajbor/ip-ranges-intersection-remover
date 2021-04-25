@@ -7,8 +7,8 @@ object IpRangesIntersectionRemoverBoot extends App {
 
   Logger.getLogger("org").setLevel(Level.ERROR)
 
-  val result = IntersectionRemover.count
-  println(result)
+  val result = IntersectionRemover.calculate
+  println(s"Result ip ranges: $result")
 
   Env.spark.stop()
 }

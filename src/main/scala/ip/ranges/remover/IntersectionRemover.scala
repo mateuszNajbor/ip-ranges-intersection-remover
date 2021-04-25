@@ -1,7 +1,9 @@
 package ip.ranges.remover
 
+import ip.ranges.remover.ApplicationProperties.{databaseHost, databasePassword, databaseUser, sendDataToElastic, useDataFromDatabase}
 import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.types.{StringType, StructType}
+import play.api.libs.json.{Json, OFormat}
 
 import java.math.BigInteger
 
@@ -19,7 +21,7 @@ object IntersectionRemover {
     ExtendedState(enrichedIp, state)
   }
 
-  def count: List[(String, String)] = {
+  def calculate: List[(String, String)] = {
     val entryData = getData
 
     val newDataFrame = prepareDatasetForRemovingIntersection(entryData)
@@ -29,18 +31,41 @@ object IntersectionRemover {
       ExtendedState(extendedState.enrichedIp, result)
     }
 
-    finalState.state.finalResult.flatten.map(_.convertToString())
+    val finalResult = finalState.state.finalResult.flatten.map(_.convertToString())
+
+    sendDataToElasticsearch(finalResult)
+
+    finalResult
   }
 
   private def getData: Dataset[IpRangeAsString] = {
+    val dataFrame = if (useDataFromDatabase) {
+      getDataFromDatabase
+    } else {
+      getDataFromFile
+    }
+
+    dataFrame
+      .as[IpRangeAsString]
+      .cache
+  }
+
+  private def getDataFromFile = {
     Env.spark
       .read
       .option("sep", ",")
       .schema(schema)
       .option("header", "false")
       .csv("data/ranges.csv")
-      .as[IpRangeAsString]
-      .cache
+  }
+
+  private def getDataFromDatabase = {
+    Env.spark.read
+      .format("jdbc")
+      .option("url", s"jdbc:postgresql://$databaseHost/postgres?user=$databaseUser&password=$databasePassword")
+      .option("driver", "org.postgresql.Driver")
+      .option("dbtable", s"(select start, stop from public.IpRanges) t")
+      .load()
   }
 
   private def prepareDatasetForRemovingIntersection(entryData: Dataset[IpRangeAsString]) = {
@@ -62,6 +87,26 @@ object IntersectionRemover {
     RangeCalculator.calculateNextState(enrichedIpRange, acc.state)
   }
 
+  private def sendDataToElasticsearch(finalResult: List[(String, String)]): Unit = {
+    if (sendDataToElastic) {
+      val resultAsJson = convertResultToJson(finalResult)
+      ElasticClient.postData("ip-ranges", resultAsJson)
+      ElasticClient.client.close()
+    }
+  }
+
+  private def convertResultToJson(result: List[(String, String)]): String = {
+    val resultAsListOfIpRange = result.map(el => IpRangeAsString(el._1, el._2))
+    val resultAsIpRanges = IpRanges(resultAsListOfIpRange)
+
+    implicit val ipRangeFormat: OFormat[IpRangeAsString] = Json.format[IpRangeAsString]
+    implicit val ipRangesFormat: OFormat[IpRanges] = Json.format[IpRanges]
+
+    Json.toJson(resultAsIpRanges).toString()
+  }
+
   case class IpRangeAsString(start: String, stop: String)
+
+  case class IpRanges(ips: List[IpRangeAsString])
 
 }
